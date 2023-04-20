@@ -167,7 +167,7 @@ def get_command_line_parser():
     parser.add_argument('--backbone_class', type=str, default='ConvNet',
                         choices=['ConvNet', 'Res12', 'Res18', 'WRN'])
     parser.add_argument('--dataset', type=str, default='MiniImageNet',
-                        choices=['MiniImageNet', 'TieredImagenet', 'CUB'])
+                        choices=['MiniImageNet', 'TieredImageNet'])
     parser.add_argument('--open_loss_type', type=str, default='MaxProbability',
                         choices=['MaxProbability', 'BinaryClassification'])
     

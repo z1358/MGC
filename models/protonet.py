@@ -11,7 +11,7 @@ class protonet(FewShotModel):
     def __init__(self, args):
         super().__init__(args)
 
-    def _forward(self, instance_embs, support_idx, query_idx, open_idx, label, testing=False):
+    def _forward(self, instance_embs, support_idx, query_idx, open_idx, label, testing=False, cls_params=None):
         emb_dim = instance_embs.size(-1)  # 640
 
         support = instance_embs[support_idx.contiguous().view(-1)].contiguous().view(*(support_idx.shape + (-1,)))

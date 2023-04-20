@@ -9,20 +9,16 @@ class FewShotModel(nn.Module):
         self.args = args
 
         if args.backbone_class == 'ConvNet':
-            from model.networks.convnet import ConvNet
+            from networks.convnet import ConvNet
             self.encoder = ConvNet()
         elif args.backbone_class == 'Res12':
             hdim = 640
-            from model.networks.res12 import ResNet
+            from networks.res12 import ResNet
             self.encoder = ResNet()
         elif args.backbone_class == 'Res18':
             hdim = 512
-            from model.networks.res18 import ResNet
+            from networks.res18 import ResNet
             self.encoder = ResNet()
-        elif args.backbone_class == 'WRN':
-            hdim = 640
-            from model.networks.WRN28 import Wide_ResNet
-            self.encoder = Wide_ResNet(28, 10, 0.5) 
         else:
             raise ValueError('')
 
@@ -51,7 +47,7 @@ class FewShotModel(nn.Module):
             self.fc = nn.Linear(hdim, args.num_class)
             if args.levels == 2:
                 args.coarse_class = 8
-                if 'iere' in args.dataset:
+                if 'Tiered' in args.dataset:
                     args.coarse_class = 20
 
             self.fc_coarse = nn.Linear(hdim, args.coarse_class)

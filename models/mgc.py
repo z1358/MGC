@@ -190,15 +190,145 @@ class MGC(FewShotModel):
 
         if args.buquan_norm:
             self.slf_att = MultiHeadAttention(args, 1, hdim, hdim, hdim, dropout=args.drop_rate_buquan, trans=True)
-        if args.enproto_trans:
-            self.enproto_trans = MultiHeadAttention(args, 1, hdim, hdim, hdim, dropout=args.drop_rate, trans=True)
         if args.buquan_coarse:
             if args.coarse_type == 'cross':
                 self.slf_coarse = CrossNet(hdim, layer_num=args.layers)
-                # self.slf_coarse = Cross(hdim)
             else:
                 self.slf_coarse = MultiHeadAttention(args, 1, hdim, hdim, hdim, dropout=args.drop_rate_buquan,
                                                      trans=True)
+
+    def _forward(self, instance_embs, support_idx, query_idx, open_idx, label, testing=False, tsne=False):
+        if self.args.aux and self.training:
+            cls_logits = self.fc(instance_embs)
+        else:
+            cls_logits = None
+
+        emb_dim = instance_embs.size(-1)  # 640
+        # organize support/query data
+        support = instance_embs[support_idx.contiguous().view(-1)].contiguous().view(*(support_idx.shape + (-1,)))
+        # get mean of the support
+        proto = support.mean(dim=1)
+        naive_proto = proto.squeeze(0)
+        q_proto = proto
+        q_proto = q_proto.permute(1, 0, 2).contiguous().view(self.args.way, 1, emb_dim)
+
+        if self.args.biased:
+            score_proto = F.normalize(proto, dim=-1)
+            weight_all = self.fc.weight.unsqueeze(0)
+            weight_all = F.normalize(weight_all, dim=-1)
+            score = self.scale_cls * torch.baddbmm(self.bias.view(1, 1), score_proto,
+                                                   weight_all.transpose(2, 1)).squeeze(0)
+        elif self.args.pre_train_cosine:
+            score = self.scale_cls * F.linear(F.normalize(proto, p=2, dim=-1), F.normalize(self.weight_base, p=2, dim=-1))
+        else:
+            score_proto = proto.squeeze(0)
+            score = self.fc(score_proto)
+            score = F.softmax(score, dim=1)
+
+
+        if testing or self.args.with_itself:
+            belong_cluster, topk_idx = self.find_continue_topk(score, self.k, testing=True)
+        else:
+            belong_cluster, topk_idx = self.find_continue_topk(score, self.k, label)
+        base_topk = self.extra_weight(belong_cluster, topk_idx)  # 5 k 640
+
+
+
+        if self.args.buquan_coarse:
+            if self.args.coarse_type == 'attention':
+                coarse_weight = self.fc_coarse.weight
+                coarse_weight = coarse_weight.unsqueeze(0).repeat(self.args.way, 1, 1)
+                q_proto = self.slf_coarse(q_proto, coarse_weight, coarse_weight)
+                q_proto = q_proto.unsqueeze(1)
+            elif self.args.coarse_type == 'cross':
+                coarse_weight = self.extra_coarse_weight(belong_cluster)
+                q_proto = self.slf_coarse(coarse_weight, q_proto)
+
+
+        if self.args.only_coarse:
+            buquan_proto = q_proto.squeeze(1)
+        elif self.args.buquan_norm:
+            buquan_proto = self.slf_att(q_proto, base_topk, base_topk)
+        second_proto = buquan_proto
+
+        num_proto = proto.shape[1]
+
+        source_query_closed = instance_embs[query_idx.contiguous().view(-1)].contiguous().view(
+            *(query_idx.shape + (-1,)))
+        source_query_open = instance_embs[open_idx.contiguous().view(-1)].contiguous().view(*(open_idx.shape + (-1,)))
+
+
+        query = source_query_closed
+        query_open = source_query_open
+
+        query = query.view(-1, emb_dim).unsqueeze(1)  # (Nbatch*Nq*Nw, 1, d)
+        query_open = query_open.view(-1, emb_dim).unsqueeze(1)
+
+        query_open = torch.cat([query, query_open], 0)
+        buquan_proto = buquan_proto.unsqueeze(0)  # 1 5 640
+        num_proto_query_open = buquan_proto.shape[1]
+        naive_proto = naive_proto.unsqueeze(0)
+
+        if self.args.use_euclidean:
+            logits_distance = -(query_open - naive_proto).pow(2).sum(2) / self.args.temperature
+            logits = -(query_open - buquan_proto).pow(2).sum(2) / self.args.temperature
+        else:
+            buquan_proto = F.normalize(buquan_proto, dim=-1) # normalize for cosine distance
+            naive_proto = F.normalize(naive_proto, dim=-1)  # normalize for cosine distance
+            query_open = query_open.permute([1, 0, 2]).contiguous()
+            query_open = F.normalize(query_open, dim=-1)  # normalize for cosine distance
+
+            logits = torch.bmm(query_open, buquan_proto.permute([0, 2, 1])) / self.args.temperature
+            logits = logits.view(-1, num_proto_query_open)
+            logits_distance = torch.bmm(query_open, naive_proto.permute([0, 2, 1])) / self.args.temperature
+            logits_distance = logits_distance.view(-1, num_proto_query_open)
+
+        cat_known_query = source_query_closed.view(-1, 1, emb_dim)
+        cat_unknown_query = source_query_open.view(-1, 1, emb_dim)
+        if self.args.eval_open_way == 5 and self.args.eval_way == 5:
+            aux_task = torch.cat([source_query_closed, source_query_open], 1)
+        else:
+            aux_task = torch.cat([cat_known_query, cat_unknown_query], 0)
+
+        aux_task = aux_task.contiguous().view(-1, 1, emb_dim)  # 150, 1, 640
+        instance_logits = torch.zeros(aux_task.size(0), self.args.eval_way).cuda()
+
+        for i in range(self.args.eval_way):
+            tmp_idx = torch.tensor([i]*logits.size(0))
+            if self.args.buquan_coarse_instance:
+                if self.args.coarse_type == 'attention':
+                    coarse_weight = self.fc_coarse.weight
+                    coarse_weight = coarse_weight.unsqueeze(0).repeat(self.args.way, 1, 1)
+                    q_proto = self.slf_coarse(q_proto, coarse_weight, coarse_weight)
+                    q_proto = q_proto.unsqueeze(1)
+                elif self.args.coarse_type == 'cross':
+                    coarse_weight = self.extra_coarse_weight(belong_cluster)
+                    instance_coarse_weight = coarse_weight[tmp_idx]
+                    aux_task = self.slf_coarse(instance_coarse_weight, aux_task)
+
+            instance_base_topk = base_topk[tmp_idx]
+
+            if self.args.only_coarse:
+                aux_emb = aux_task.squeeze(1)
+            else:
+                aux_emb = self.slf_att(aux_task, instance_base_topk, instance_base_topk)
+
+            if self.args.use_euclidean:
+                # print("using euclidean!")
+                aux_emb = aux_emb.unsqueeze(1)
+                instance_logits_tmp = -(aux_emb - buquan_proto).pow(2).sum(2) / self.args.temperature
+
+            else:
+                aux_emb = aux_emb.unsqueeze(0)
+                aux_emb = F.normalize(aux_emb, dim=-1)  # normalize for cosine distance
+                buquan_proto = F.normalize(buquan_proto, dim=-1)  # normalize for cosine distance
+                instance_logits_tmp = torch.bmm(aux_emb, buquan_proto.permute([0, 2, 1])) / self.args.temperature
+                instance_logits_tmp = instance_logits_tmp.view(-1, num_proto)
+
+            instance_logits[:, i] = instance_logits_tmp[:, -self.args.eval_way+i]
+
+        bcls_score = None
+        return logits_distance, logits, cls_logits, bcls_score, naive_proto, second_proto, instance_logits
 
     def coarse_cluster(self):
         netdict = {}
@@ -207,7 +337,7 @@ class MGC(FewShotModel):
         if self.args.dataset == 'MiniImageNet':
             max_label = 8
             SPLIT_PATH = osp.join(ROOT_PATH, 'data/miniimagenet/split')
-        elif (self.args.dataset == 'TieredImageNet' or self.args.dataset == 'TieredImagenet'):
+        elif self.args.dataset == 'TieredImageNet':
             max_label = 20
             SPLIT_PATH = osp.join(ROOT_PATH, 'data/tieredimagenet/split')
         with open(osp.join(SPLIT_PATH, 'coarse.txt')) as words:

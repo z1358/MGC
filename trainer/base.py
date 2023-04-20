@@ -2,13 +2,13 @@ import abc
 import torch
 import os.path as osp
 
-from model.utils import (
+from utils import (
     ensure_path,
     Averager, Timer, count_acc,
     compute_confidence_interval,
 )
-from model.logger import Logger
-from model.logger import Mylog, set_log_path, log
+from logger import Logger
+from logger import Mylog, set_log_path, log
 
 class Trainer(object, metaclass=abc.ABCMeta):
     def __init__(self, args):

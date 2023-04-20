@@ -3,8 +3,7 @@ import torch.nn as nn
 import numpy as np
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from model.dataloader.samplers import CategoriesSampler, RandomSampler, ClassSampler
-from model.models.mgc import mgc
+from dataloader.samplers import CategoriesSampler, RandomSampler, ClassSampler
 
 class MultiGPUDataloader:
     def __init__(self, dataloader, num_device):
@@ -34,11 +33,9 @@ class MultiGPUDataloader:
 def get_dataloader(args):
     if args.dataset == 'MiniImageNet':
         # Handle MiniImageNet
-        from model.dataloader.mini_imagenet import MiniImageNet as Dataset
-    elif args.dataset == 'CUB':
-        from model.dataloader.cub import CUB as Dataset
-    elif (args.dataset == 'TieredImageNet' or args.dataset == 'TieredImagenet'):
-        from model.dataloader.tiered_imagenet import tieredImageNet as Dataset
+        from dataloader.mini_imagenet import MiniImageNet as Dataset
+    elif args.dataset == 'TieredImageNet':
+        from dataloader.tiered_imagenet import tieredImageNet as Dataset
     else:
         raise ValueError('Non-supported Dataset.')
 

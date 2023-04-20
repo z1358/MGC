@@ -19,7 +19,6 @@ if __name__ == '__main__':
     num_gpu = set_gpu(args)
     trainer = MGCTrainer(args)
     trainer.train()
-    trainer.evaluate_test(name='max_acc.pth')
     trainer.evaluate_test(name='max_auroc_instance.pth')
     trainer.final_record()
     print(args.save_path)

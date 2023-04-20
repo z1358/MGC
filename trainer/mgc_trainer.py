@@ -135,7 +135,7 @@ class MGCTrainer(Trainer):
         self.save_model('epoch-last')
 
 
-    def evaluate_test(self, name='max_acc.pth', filename='trainfsl.txt'):
+    def evaluate_test(self, name='max_auroc_instance.pth', filename='trainfsl.txt'):
         # restore model args
         args = self.args
         args.way = args.eval_way
@@ -190,8 +190,6 @@ class MGCTrainer(Trainer):
                         instance_pos_max, _ = torch.max(instance_pos_logits, dim=1, keepdim=True)
                         instance_neg_max, _ = torch.max(instance_neg_logits, dim=1, keepdim=True)
                         test_auroc_instance = self.auroc(instance_pos_max, instance_neg_max)
-
-
                 else:
                     test_scores = bcls_score.detach().cpu().numpy()
                     test_auroc = self.auroc_bcls(test_scores)
